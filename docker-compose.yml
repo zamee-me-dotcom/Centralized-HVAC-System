@@ -1,0 +1,280 @@
+---
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  HVAC Control System – Docker Compose
+#
+#  Services
+#  ────────
+#  Infrastructure:  emqx, postgres, influxdb, redis
+#  Backend:         device-service, telemetry-service, control-service,
+#                   digital-twin-service, alert-service
+#  Edge (sim):      edge-gateway
+#  Observability:   grafana, prometheus
+#  Admin:           pgadmin, influx-ui
+# ═══════════════════════════════════════════════════════════════════════════
+
+networks:
+  hvac-backend:
+    driver: bridge
+  hvac-edge:
+    driver: bridge
+  hvac-observability:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  influx_data:
+  redis_data:
+  emqx_data:
+  emqx_log:
+  grafana_data:
+  prometheus_data:
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Infrastructure
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── EMQX MQTT Broker ────────────────────────────────────────────────────
+  emqx:
+    image: emqx/emqx:5.6.0
+    container_name: hvac-emqx
+    restart: unless-stopped
+    ports:
+      - "1883:1883"    # MQTT plain (internal only – disable in prod)
+      - "8883:8883"    # MQTT TLS
+      - "8083:8083"    # MQTT WebSocket
+      - "18083:18083"  # Dashboard
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+      - ./docker/certs:/opt/emqx/certs:ro
+      - ./docker/emqx/emqx.conf:/opt/emqx/etc/emqx.conf:ro
+      - ./docker/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
+    environment:
+      EMQX_NAME: hvac-broker
+      EMQX_HOST: 0.0.0.0
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CACERTFILE: /opt/emqx/certs/ca.crt
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CERTFILE:   /opt/emqx/certs/broker.crt
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__KEYFILE:    /opt/emqx/certs/broker.key
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__VERIFY:     verify_peer
+    networks:
+      - hvac-backend
+      - hvac-edge
+    healthcheck:
+      test: ["CMD", "emqx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: hvac-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      POSTGRES_DB:       hvac
+      POSTGRES_USER:     hvac_user
+      POSTGRES_PASSWORD: changeme
+    networks:
+      - hvac-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hvac_user -d hvac"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── InfluxDB ─────────────────────────────────────────────────────────────
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: hvac-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - influx_data:/var/lib/influxdb2
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE:        setup
+      DOCKER_INFLUXDB_INIT_USERNAME:    hvac_admin
+      DOCKER_INFLUXDB_INIT_PASSWORD:    changeme123
+      DOCKER_INFLUXDB_INIT_ORG:         hvac-org
+      DOCKER_INFLUXDB_INIT_BUCKET:      hvac-telemetry
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: changeme-influx-token
+      DOCKER_INFLUXDB_INIT_RETENTION:   30d
+    networks:
+      - hvac-backend
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: hvac-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --save 60 1000
+      --loglevel warning
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    networks:
+      - hvac-backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Backend Services (all share the same image, different CMD)
+# ─────────────────────────────────────────────────────────────────────────────
+
+  x-backend-common: &backend-common
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      emqx:
+        condition: service_healthy
+    volumes:
+      - ./docker/certs:/certs:ro
+    networks:
+      - hvac-backend
+    env_file:
+      - ./docker/.env.backend
+
+  device-service:
+    <<: *backend-common
+    container_name: hvac-device-service
+    ports:
+      - "8001:8000"
+    command: ["uvicorn", "backend.device_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    environment:
+      SERVICE_NAME: device-service
+
+  telemetry-service:
+    <<: *backend-common
+    container_name: hvac-telemetry-service
+    ports:
+      - "8002:8000"
+    command: ["uvicorn", "backend.telemetry_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    environment:
+      SERVICE_NAME: telemetry-service
+
+  control-service:
+    <<: *backend-common
+    container_name: hvac-control-service
+    ports:
+      - "8003:8000"
+    command: ["uvicorn", "backend.control_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      SERVICE_NAME: control-service
+
+  digital-twin-service:
+    <<: *backend-common
+    container_name: hvac-digital-twin
+    ports:
+      - "8004:8000"
+    command: ["uvicorn", "backend.digital_twin_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      SERVICE_NAME: digital-twin-service
+
+  alert-service:
+    <<: *backend-common
+    container_name: hvac-alert-service
+    ports:
+      - "8005:8000"
+    command: ["uvicorn", "backend.alert_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      SERVICE_NAME: alert-service
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Edge Gateway (simulated – uses mock adapters)
+# ─────────────────────────────────────────────────────────────────────────────
+
+  edge-gateway:
+    build:
+      context: .
+      dockerfile: docker/edge.Dockerfile
+    container_name: hvac-edge-gw-01
+    restart: unless-stopped
+    depends_on:
+      emqx:
+        condition: service_healthy
+    volumes:
+      - ./edge_gateway:/app
+      - ./docker/certs:/certs:ro
+      - ./edge_gateway/rules/rules.json:/etc/edge/rules.json:ro
+    environment:
+      MQTT_HOST: emqx
+      MQTT_PORT: 1883
+    networks:
+      - hvac-edge
+      - hvac-backend
+    command: ["python", "-m", "edge_gateway.gateway", "/app/gateway_config.yaml"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Observability
+# ─────────────────────────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: hvac-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    networks:
+      - hvac-backend
+      - hvac-observability
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: hvac-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_USER:     admin
+      GF_SECURITY_ADMIN_PASSWORD: changeme
+      GF_AUTH_ANONYMOUS_ENABLED:  "true"
+    depends_on:
+      - prometheus
+      - influxdb
+    networks:
+      - hvac-observability
+      - hvac-backend

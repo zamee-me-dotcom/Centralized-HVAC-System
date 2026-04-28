@@ -1,0 +1,46 @@
+[
+  {
+    "id": "local-emergency-shutdown",
+    "name": "Emergency shutdown: critical overtemperature",
+    "enabled": true,
+    "priority": 0,
+    "conditions": [
+      { "field": "temperature", "operator": "gte", "value": 38.0 }
+    ],
+    "logic": "AND",
+    "actions": [
+      { "type": "set_on_off",   "value": false },
+      { "type": "set_setpoint", "value": 16.0 }
+    ],
+    "cooldown_s": 600
+  },
+  {
+    "id": "local-high-temp-cooling",
+    "name": "Aggressive cooling when temperature is high",
+    "enabled": true,
+    "priority": 10,
+    "conditions": [
+      { "field": "temperature", "operator": "gte", "value": 30.0 }
+    ],
+    "logic": "AND",
+    "actions": [
+      { "type": "set_setpoint", "value": 18.0 }
+    ],
+    "cooldown_s": 120
+  },
+  {
+    "id": "local-energy-save",
+    "name": "Raise setpoint slightly during low-load periods",
+    "enabled": true,
+    "priority": 80,
+    "conditions": [
+      { "field": "load",        "operator": "lt",  "value": 25.0 },
+      { "field": "temperature", "operator": "lte", "value": 23.5 }
+    ],
+    "logic": "AND",
+    "actions": [
+      { "type": "set_setpoint", "value": 24.0 }
+    ],
+    "cooldown_s": 300
+  }
+]

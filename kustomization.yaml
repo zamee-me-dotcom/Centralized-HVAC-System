@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hvac-system
+
+resources:
+  - base/namespace-config.yaml
+  - base/deployments.yaml
+
+# ── Image references (update tag on release) ──────────────────────────────────
+images:
+  - name: hvac/backend
+    newTag: "1.0.0"
+
+# ── Common labels applied to all resources ────────────────────────────────────
+commonLabels:
+  app.kubernetes.io/part-of:    hvac-control-system
+  app.kubernetes.io/managed-by: kustomize
+  version:                      "1.0.0"
+
+# ── ConfigMap generator from .env file ───────────────────────────────────────
+# configMapGenerator:
+#   - name: hvac-config-generated
+#     envs:
+#       - .env.production
+
+# ── Patches (add resource limits overlay for production) ──────────────────────
+patches: []

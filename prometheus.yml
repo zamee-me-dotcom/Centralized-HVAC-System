@@ -1,0 +1,54 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'hvac-monitor'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  - job_name: 'device-service'
+    static_configs:
+      - targets: ['device-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'telemetry-service'
+    static_configs:
+      - targets: ['telemetry-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'control-service'
+    static_configs:
+      - targets: ['control-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'digital-twin-service'
+    static_configs:
+      - targets: ['digital-twin-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'alert-service'
+    static_configs:
+      - targets: ['alert-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'emqx'
+    static_configs:
+      - targets: ['emqx:18083']
+    metrics_path: /api/v5/prometheus/stats
+    basic_auth:
+      username: admin
+      password: public
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']

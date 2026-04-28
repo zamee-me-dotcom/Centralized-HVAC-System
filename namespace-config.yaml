@@ -1,0 +1,66 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════
+#  HVAC Control System – Kubernetes Base Configuration
+#  Apply with: kubectl apply -k k8s/base/
+# ═══════════════════════════════════════════════════════════════════════════
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hvac-system
+  labels:
+    app.kubernetes.io/name: hvac-control-system
+    environment: production
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hvac-config
+  namespace: hvac-system
+data:
+  POSTGRES_HOST:      "postgres-svc"
+  POSTGRES_PORT:      "5432"
+  POSTGRES_DB:        "hvac"
+  INFLUX_URL:         "http://influxdb-svc:8086"
+  INFLUX_ORG:         "hvac-org"
+  INFLUX_BUCKET:      "hvac-telemetry"
+  REDIS_HOST:         "redis-svc"
+  REDIS_PORT:         "6379"
+  MQTT_HOST:          "emqx-svc"
+  MQTT_PORT:          "8883"
+  ENVIRONMENT:        "production"
+  LOG_LEVEL:          "INFO"
+  API_WORKERS:        "4"
+  ALERT_TEMP_HIGH_C:  "30.0"
+  ALERT_TEMP_CRITICAL_C: "35.0"
+
+---
+# Secret template – fill values with `kubectl create secret` or Vault injection
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hvac-secrets
+  namespace: hvac-system
+type: Opaque
+stringData:
+  POSTGRES_USER:     "hvac_user"
+  POSTGRES_PASSWORD: "CHANGE_ME"
+  INFLUX_TOKEN:      "CHANGE_ME"
+  REDIS_PASSWORD:    ""
+  MQTT_USERNAME:     "hvac_backend"
+  MQTT_PASSWORD:     "CHANGE_ME"
+  JWT_SECRET:        "CHANGE_ME_MINIMUM_32_CHARS"
+
+---
+# TLS certificates as secrets (populated by cert-manager or manually)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hvac-tls-certs
+  namespace: hvac-system
+type: Opaque
+data:
+  ca.crt:      ""   # base64-encoded CA cert
+  backend.crt: ""   # base64-encoded backend client cert
+  backend.key: ""   # base64-encoded backend client key
